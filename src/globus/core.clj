@@ -12,165 +12,162 @@
    ))
 
 (def org-dir "/Users/kenta/clojure/globus/data/org/")
+(def prcs-dir "/Users/kenta/clojure/globus/data/prcs/")
 (def out-dir "/Users/kenta/clojure/globus/data/out/")
 
-(def yqset (for [y (range 5 7) q (range 1 5)] {:y y :q q}))
-(defn str-num
+; when year 8 finished, it will be changed
+(def yqs (for [y (range 5 7) q (range 1 5)] {:y y :q q}))
+
+(defn zero-fill
+  "if it is 1 digit, number is made to 2 digit by 0"
   [i]
   (if (> 10 i)
     (str 0 i)
     i))
 
-(def items (for [i (range 0 27)] (str "i" (str-num i))))
 (def regions '("AP", "EA", "LA", "NA"))
-(def ks (for [i items r regions] {:item i :rg r}))
 
-
-;; need to change for year
-(defn extract-numbers
-  ""
+(defn read-csv
+  "read csv data"
   [in-file]
   (with-open [in (io/reader in-file)]
-    (doall
-     (take 27
-       (for [line (csv/read-csv in) :when (= 17 (count line))]
-         (take 8 (drop 4 line)))))))
+    (doall (csv/read-csv in))))
 
-(defn pre-transpose
-  ""
+(defn write-csv
+  "write csv data"
+  [out-file lists]
+  (with-open [out (io/writer out-file :append true)]
+    (csv/write-csv out lists)))
+
+(defn into-2d-str-array
+  "make a 2 dimention Stirng array"
   [lists]
   (into-array (for [list lists] (into-array String list))))
 
-(defn transpose
-  ""
+(defn transpose-2d-str-array
+  "return transposed 2 dimention String array"
   [in-array]
-  (let [out-array (make-array String 8 27)]
-    (doseq [i (range 0 27) j (range 0 8)]
+  (let [x (alength in-array)
+        y (alength (aget in-array))
+        out-array (make-array String y x)]
+    (doseq [i (range 0 x) j (range 0 y)]
       (aset #^String out-array j i (aget #^String in-array i j)))
   out-array))
 
-(defn create-header
-  ""
-  [r n]
-  (for [y (range 5 7) q (range 1 5)] `(~q ~y ~n ~r)))
-
-(defn prepare
-  ""
-  [filename]
-  (for [line (transpose
-              (pre-transpose
-               (extract-numbers filename)))] (seq line)))
-
-(defn write-csv
-  ""
-  [lists]
-  (with-open [out (io/writer (str out-dir "test.txt") :append true)]
-    (csv/write-csv out lists)))
-
-(defn main-a
-  ""
-  [filename r n]
-  (write-csv (map into (prepare filename) (create-header r n))))
-
-(defn control-a
-  ""
-  [in-dir]
-  (doseq [f (.listFiles (io/file in-dir))]
-    (let [[_ r n] (re-matches #"CIR_CompanyAnalysis_(..)_Y\d_([A-H])_Company.csv" (.getName f))] (main-a (.getPath f) r n))))
-
 (def h2 {:subprotocol "h2"
-         :subname "/Users/kenta/h2/test"
+         :subname "/Users/kenta/h2/globus"
          :user "sa"
          :password ""
          :classname "org.h2.Driver"
           })
 
-(defn db-select
+(defn select-from-h2
   ""
-  [item y q]
+  [sql]
   (jdbc/with-connection h2
-    (jdbc/with-query-results rows [(str
-     " SELECT
-           rg, cp, " item
-     " FROM
-           CSVREAD('/Users/kenta/clojure/globus/data/out/test.txt')
-       WHERE y =" y "and q = " q
-      " ORDER BY rg, cp;")] (doall rows))))
+    (jdbc/with-query-results
+      rows
+      [sql]
+      (doall rows))))
 
-
-(defn control-b
+(defn get-value
   ""
-  [yqs items]
-  (for [yq yqs]
-    (cons (str (+ (yq :y) (* 0.25 (- (yq :q) 1))))(flatten (for [item items] (map #((keyword item) %) (db-select item (:y yq) (:q yq))))))))
+  [line t d]
+  (take t (drop d line)))
 
-(def mid (control-b yqset items))
+;;; for cir report
+(def cir-file "cir.csv")
+(def cir-items (for [i (range 0 27)] (str "i" (zero-fill i))))
+(def cir-keys (for [i cir-items r regions] {:item i :rg r}))
 
-(defn out-2
+;; to merge cir files
+(defn extract-cir-numbers
+  "extract numbers from original cir report"
+  [lists]
+  (take 27
+        (for [line lists :when (= 17 (count line))]
+         ; need to change for year
+          (get-value 8 4))))
+
+(defn create-cir-header
+  "return list that supplement the lack of information in cir file"
+  [rg cp]
+  (for [y (range 5 7) q (range 1 5)] `(~q ~y ~rg ~cp)))
+
+(defn get-cir-in-data
+  "get cir data in proper format"
+  [file-path]
+  (for [line (-> (read-csv file-path)
+                 (extract-cir-numbers ,)
+                 (into-2d-str-array ,)
+                 (transpose-2d-str-array ,))]
+    (seq line)))
+
+(defn cir-in-process
+  "write lines of data in each cir file"
+  [file-path rg cp]
+  (write-csv
+   (str prcs-dir cir-file)
+   (map into (get-cir-in-data file-path) (create-cir-header rg cp))))
+
+(defn generate-merged-cir-data
   ""
-  [out-data]
-  (with-open [out (io/writer (str out-dir "sum.csv") :append true)]
-    (csv/write-csv out out-data)))
+  []
+  (doseq [f (.listFiles (io/file org-dir))]
+    (let [[_ rg cp]
+          (re-matches
+           #"CIR_CompanyAnalysis_(..)_Y\d_([A-H])_Company.csv"
+           (.getName f))]
+      (cir-in-process (.getPath f) rg cp))))
 
-(defn split-file
-  ""
-  [in-file]
-  (with-open [in (io/reader in-file)]
-    (doall
-      (for [line (csv/read-csv in)]
-        (take 8 (drop 1 line))))))
-
-;(def control-c
-;  ""
-;  (icore/col-names 
-;    (icore/conj-cols
-;     (icore/to-dataset (range 5 7 0.25))
-;     (icore/to-dataset (split-file (str out-dir "sum.csv"))))
-;  '("Period", "A", "B", "C", "D", "E", "F", "G", "H")))
-
-(defn get-data
-  ""
+;; to draw charts of cir items
+(defn create-cir-query
   [item rg]
-  (jdbc/with-connection h2
-    (jdbc/with-query-results rows [(str
-     " SELECT 
-           y, q, cp, " item " as item"
-     " FROM
-           CSVREAD('/Users/kenta/clojure/globus/data/out/test.txt')
-       WHERE rg = '" rg "'
-       ORDER BY cp, y, q;")] (doall rows))))
+  "create query string for cir"
+  (str
+   " SELECT 
+         y, q, cp, " item " as item"
+   " FROM
+         CSVREAD('" out-dir cir-file "')
+     WHERE rg = '" rg "'
+     ORDER BY cp, y, q;"))
+
+(defn select-cir-data
+  "select cir data from cir table"
+  [item rg]
+  (select-from-h2 (create-cir-query item rg)))
 
 (defn calc-time
+  "calculate time from year and quater"
   [{y :y q :q}]
   (+ (read-string y) (* 0.25 (- (read-string q) 1))))
 
-
-(defn translate-data
-  ""
+(defn get-cir-out-data
+  "get cir our data"
   [lines]
-  ;; (for
   (for [line lines] [(line :cp) (calc-time line) (line :item)]))
 
-
-(defn out-3
+(defn cir-out-process
   ""
-  [item rg out-data]
-  (with-open [out (io/writer (str out-dir  item rg ".csv") :append false)]
-    (csv/write-csv out out-data)))
+  [item rg]
+  (write-csv
+   (str prcs-dir item rg ".csv")
+   (-> (select-cir-data item rg)
+       (get-cir-out-data ,))))
 
-(defn control-d
+(defn generate-splited-cir-data
   ""
   []
   (doseq [{item :item rg :rg} ks]
-    (out-3 item rg (translate-data (get-data item rg)))))
+    (cir-out-process item rg)))
 
 (defn load-dataset-with-col-names
   [item rg]
   (icore/col-names
-   (iio/read-dataset (str out-dir item rg ".csv"):header false)
+   (iio/read-dataset (str prcs-dir item rg ".csv"):header false)
    '("C" "X" "Y")))
 
-(defn control-e
+(defn generate-cir-charts
   ""
   []
   (doseq [{item :item rg :rg} ks]
@@ -187,3 +184,9 @@
      (str out-dir item "_" rg ".pdf")
      :width 400
      :height 200)))
+
+;;; gsr
+(defn extract-number-in-gsr
+  ""
+  [file]
+  )
