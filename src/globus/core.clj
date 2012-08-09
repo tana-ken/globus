@@ -48,7 +48,7 @@
   "return transposed 2 dimention String array"
   [in-array]
   (let [x (alength in-array)
-        y (alength (aget in-array))
+        y (alength (aget #^String in-array 0))
         out-array (make-array String y x)]
     (doseq [i (range 0 x) j (range 0 y)]
       (aset #^String out-array j i (aget #^String in-array i j)))
@@ -158,7 +158,7 @@
 (defn generate-splited-cir-data
   ""
   []
-  (doseq [{item :item rg :rg} ks]
+  (doseq [{item :item rg :rg} cir-keys]
     (cir-out-process item rg)))
 
 (defn load-dataset-with-col-names
@@ -170,7 +170,7 @@
 (defn generate-cir-charts
   ""
   []
-  (doseq [{item :item rg :rg} ks]
+  (doseq [{item :item rg :rg} cir-keys]
     (ipdf/save-pdf
      (icharts/scatter-plot
       :X
@@ -186,7 +186,33 @@
      :height 200)))
 
 ;;; gsr
-(defn extract-number-in-gsr
+(def gsr-file "gsr.csv")
+(def gsr-items (for [i (range 0 35)] (str "g" (zero-fill i))))
+
+(defn extract-gsr-numbers
   ""
-  [file]
-  )
+  [lines]
+  (for [line2 (for [line1 lines :when (< 5 (count line1))] line1)
+        :when (not (= "" (nth line2 5)))]
+    (get-value line2 8 4)))
+
+(def testfile (str org-dir  "GSR_Y6.csv"))
+
+(defn get-gsr-in-data
+  ""
+  [file-path]
+  (for [line (-> (read-csv file-path)
+             (extract-gsr-numbers ,)
+             (into-2d-str-array ,)
+             (transpose-2d-str-array ,))]
+    (seq line)))
+
+(defn gsr-in-process
+  ""
+  [file-path year]
+  (write-csv
+   (str prcs-dir gsr-file)
+   (for [line (get-gsr-in-data file-path)] (conj line year))))
+;;
+(def p (idatasets/get-dataset :airline-passengers))
+(def sb (icharts/stacked-bar-chart :year :passengers :data p :group-by :month :legend true))
