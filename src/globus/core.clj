@@ -87,7 +87,7 @@
   (take 27
         (for [line lists :when (= 17 (count line))]
          ; need to change for year
-          (get-value 8 4))))
+          (get-value line 8 4))))
 
 (defn create-cir-header
   "return list that supplement the lack of information in cir file"
@@ -96,6 +96,7 @@
 
 (defn get-cir-in-data
   "get cir data in proper format"
+  ;need file filter
   [file-path]
   (for [line (-> (read-csv file-path)
                  (extract-cir-numbers ,)
@@ -112,8 +113,9 @@
 
 (defn generate-merged-cir-data
   ""
+  ;; match mechanism did not work well
   []
-  (doseq [f (.listFiles (io/file org-dir))]
+  (doseq [f (.listFiles (io/file (str org-dir "/cir")))]
     (let [[_ rg cp]
           (re-matches
            #"CIR_CompanyAnalysis_(..)_Y\d_([A-H])_Company.csv"
@@ -128,7 +130,7 @@
    " SELECT 
          y, q, cp, " item " as item"
    " FROM
-         CSVREAD('" out-dir cir-file "')
+         CSVREAD('" prcs-dir cir-file "')
      WHERE rg = '" rg "'
      ORDER BY cp, y, q;"))
 
@@ -151,7 +153,7 @@
   ""
   [item rg]
   (write-csv
-   (str prcs-dir item rg ".csv")
+   (str prcs-dir "cir/" item rg ".csv")
    (-> (select-cir-data item rg)
        (get-cir-out-data ,))))
 
@@ -164,14 +166,14 @@
 (defn load-dataset-with-col-names
   [item rg]
   (icore/col-names
-   (iio/read-dataset (str prcs-dir item rg ".csv"):header false)
+   (iio/read-dataset (str prcs-dir "cir/" item rg ".csv"):header false)
    '("C" "X" "Y")))
 
 (defn generate-cir-charts
   ""
   []
   (doseq [{item :item rg :rg} cir-keys]
-    (ipdf/save-pdf
+    (icore/save
      (icharts/scatter-plot
       :X
       :Y
@@ -181,7 +183,7 @@
       :title (str item "_" rg)
       :x-label nil
       :y-label nil)
-     (str out-dir item "_" rg ".pdf")
+     (str out-dir "cir/" item "_" rg ".png")
      :width 400
      :height 200)))
 
