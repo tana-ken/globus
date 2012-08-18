@@ -10,4 +10,5 @@
                  [incanter/incanter-core "1.3.0"]
                  [incanter/incanter-charts "1.3.0"]
                  [incanter/incanter-pdf "1.3.0"]
+                 [clj-pdf "0.9.9"]
                  ])
