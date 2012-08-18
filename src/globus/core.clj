@@ -1,5 +1,6 @@
 (ns globus.core
   (:require
+;   [clj-pdf.core :as pdf]
    [clojure.java.io :as io]
    [clojure.data.csv :as csv]
    [clojure.pprint :as pp]
@@ -16,7 +17,7 @@
 (def out-dir "/Users/kenta/clojure/globus/data/out/")
 
 ; when year 8 finished, it will be changed
-(def yqs (for [y (range 5 7) q (range 1 5)] {:y y :q q}))
+(def yqs (for [y (range 5 8) q (range 1 5)] {:y y :q q}))
 
 (defn zero-fill
   "if it is 1 digit, number is made to 2 digit by 0"
@@ -78,6 +79,37 @@
 ;;; for cir report
 (def cir-file "cir.csv")
 (def cir-items (for [i (range 0 27)] (str "i" (zero-fill i))))
+(def cir-names '(
+  "Common Retail Dealers Chains"
+  "Common Retail Dealers Online"
+  "Common Retail Dealers Shops"
+  "Common Tech Support Budget"
+  "Common Advertising Budget"
+  "Common Warranty Period Entry-L"
+  "Common Warranty Period Multi-F"
+  "Entry-L Average Price"
+  "Entry-L Promotions Number"
+  "Entry-L Promotions Length"
+  "Entry-L Promotions Discount"
+  "Entry-L Special Utility Features"
+  "Entry-L Number of Models"
+  "Entry-L P/Q Rating"
+  "Entry-L Demand"
+  "Entry-L Market Share"
+  "Entry-L Stockout (yes/no)"
+  "Multi-F Average Price"
+  "Multi-F Promotions Number"
+  "Multi-F Promotions Length"
+  "Multi-F Promotions Discount"
+  "Multi-F Special Utility Features"
+  "Multi-F Number of Models"
+  "Multi-F P/Q Rating"
+  "Multi-F Demand"
+  "Multi-F Market Share"
+  "Multi-F Stockout (yes/no)"))
+
+(def cir-hash (apply hash-map (interleave cir-items cir-names)))
+
 (def cir-keys (for [i cir-items r regions] {:item i :rg r}))
 
 ;; to merge cir files
@@ -87,12 +119,12 @@
   (take 27
         (for [line lists :when (= 17 (count line))]
          ; need to change for year
-          (get-value line 8 4))))
+          (get-value line 12 4))))
 
 (defn create-cir-header
   "return list that supplement the lack of information in cir file"
   [rg cp]
-  (for [y (range 5 7) q (range 1 5)] `(~q ~y ~rg ~cp)))
+  (for [y (range 5 8) q (range 1 5)] `(~q ~y ~rg ~cp)))
 
 (defn get-cir-in-data
   "get cir data in proper format"
@@ -111,6 +143,7 @@
    (str prcs-dir cir-file)
    (map into (get-cir-in-data file-path) (create-cir-header rg cp))))
 
+;; add avg
 (defn generate-merged-cir-data
   ""
   ;; match mechanism did not work well
@@ -121,6 +154,33 @@
            #"CIR_CompanyAnalysis_(..)_Y\d_([A-H])_Company.csv"
            (.getName f))]
       (cir-in-process (.getPath f) rg cp))))
+
+(def asql (str
+           " SELECT 
+                  'AVG' as cp, rg, y, q" (apply str (for [i cir-items] (str ", AVG(cast(" i " as double)) as " i)))
+           " FROM
+                 CSVREAD('" prcs-dir cir-file "')
+             GROUP BY rg, y, q
+             ORDER BY rg, y, q;"))
+
+(defn add-avg
+  []
+  (write-csv
+   (str prcs-dir cir-file)
+   (for [line (select-from-h2 asql)]
+     [(line :cp)
+      (line :rg)
+      (line :y)
+      (line :q)
+      (line :i00) (line :i01) (line :i02)
+      (line :i03) (line :i04) (line :i05)
+      (line :i06) (line :i07) (line :i08)
+      (line :i09) (line :i10) (line :i11)
+      (line :i12) (line :i13) (line :i14)
+      (line :i15) (line :i16) (line :i17)
+      (line :i18) (line :i19) (line :i20)
+      (line :i21) (line :i22) (line :i23)
+      (line :i24) (line :i25) (line :i26)])))
 
 ;; to draw charts of cir items
 (defn create-cir-query
@@ -180,11 +240,11 @@
       :data(load-dataset-with-col-names item rg)
       :group-by :C
       :legend false
-      :title (str item "_" rg)
+      :title (str (cir-hash item) "_" rg)
       :x-label nil
       :y-label nil)
      (str out-dir "cir/" item "_" rg ".png")
-     :width 400
+     :width 600
      :height 200)))
 
 ;;; gsr
@@ -216,5 +276,5 @@
    (str prcs-dir gsr-file)
    (for [line (get-gsr-in-data file-path)] (conj line year))))
 ;;
-(def p (idatasets/get-dataset :airline-passengers))
-(def sb (icharts/stacked-bar-chart :year :passengers :data p :group-by :month :legend true))
+;(def p (idatasets/get-dataset :airline-passengers))
+;(def sb (icharts/stacked-bar-chart :year :passengers :data p :group-by :month :legend true))
