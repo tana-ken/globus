@@ -2,6 +2,7 @@
   (:require
 ;   [clj-pdf.core :as pdf]
    [clojure.java.io :as io]
+   [clojure.java.shell :as shell]
    [clojure.data.csv :as csv]
    [clojure.pprint :as pp]
    [clojure.java.jdbc :as jdbc]
@@ -27,6 +28,8 @@
     i))
 
 (def regions '("AP", "EA", "LA", "NA"))
+(def cps '("A" "B" "C" "D" "E" "F" "G" "H"))
+
 
 (defn read-csv
   "read csv data"
@@ -119,7 +122,7 @@
   (take 27
         (for [line lists :when (= 17 (count line))]
          ; need to change for year
-          (get-value line 12 4))))
+          (get-value line 8 4))))
 
 (defn create-cir-header
   "return list that supplement the lack of information in cir file"
@@ -143,7 +146,6 @@
    (str prcs-dir cir-file)
    (map into (get-cir-in-data file-path) (create-cir-header rg cp))))
 
-;; add avg
 (defn generate-merged-cir-data
   ""
   ;; match mechanism did not work well
@@ -155,6 +157,7 @@
            (.getName f))]
       (cir-in-process (.getPath f) rg cp))))
 
+;; add ave
 (def asql (str
            " SELECT 
                   'AVG' as cp, rg, y, q" (apply str (for [i cir-items] (str ", AVG(cast(" i " as double)) as " i)))
@@ -246,6 +249,304 @@
      (str out-dir "cir/" item "_" rg ".png")
      :width 600
      :height 200)))
+
+;;
+(def aasql
+  (str
+   " SELECT
+         rg, y, q,"
+   (apply str (interpose "," (for [cp cps] (str " CASE WHEN cp='" cp "' THEN i00 as " cp))))
+   " FROM
+         CSVREAD('" prcs-dir cir-file "')
+     ORDER BY rg, y, q;"))
+
+;; from joe
+(defn create-sum-sql
+  ""
+  [y]
+  (str
+   " SELECT
+         rg, cp, sum(cast(i15 as double)) as el, sum(cast(i25 as double)) as mf"
+   " FROM
+         CSVREAD('" prcs-dir cir-file "')"
+   " WHERE
+         y='" y "' AND NOT cp='AVG'"
+   " GROUP BY
+         rg, cp"
+   " ORDER BY
+         rg, cp"))
+
+(defn convert-sum-data
+  ""
+  [lines]
+  (for [line lines] [(line :rg) (line :cp) (line :el) (line :mf)]))
+
+(defn add-sum-data
+  ""
+  [y]
+  (write-csv 
+   (str prcs-dir "sum.csv")
+   (convert-sum-data (select-from-h2 (create-sum-sql y)))))
+
+;;; cor
+(def short-name {:a "actual" :p "projection"})
+(def pg-rg {"1" "NA" "2" "EA" "3" "AP" "4" "LA"}) 
+(def geo-prd-cost-el "1540x60+780+770")
+(def geo-prd-cost-mf "1540x60+780+2015")
+(def geo-lbr-cost "1540x60+780+2760")
+(def geo-lbr-prod "1540x60+780+2810")
+(def geo-inv-el "1540x135+780+960")
+(def geo-inv-mf "1540x135+780+2310")
+
+(defn make-cor-file-name-str
+  ""
+  [y k-ap]
+  (str "COR_year" y "_" (short-name k-ap)))
+
+(defn make-pdf2png-args
+  ""
+  [file-name]
+  (list
+   "-density" "300x300"
+   "-units" "PixelsPerInch"
+   (str org-dir "cor/" file-name ".pdf")
+   (str prcs-dir "cor/" file-name ".png")))
+
+(defn pdf2png
+  ""
+  [y k-ap]
+  (apply shell/sh "convert" (make-pdf2png-args (make-cor-file-name-str y k-ap))))
+
+(defn make-crop-args
+  ""
+  [file-name geo in-ext out-ext]
+  (list
+   "-crop"
+   geo
+   (str prcs-dir "cor/" file-name in-ext)
+   (str prcs-dir "cor/crop/" file-name out-ext)))
+
+(defn crop
+  [args]
+  (apply shell/sh "convert" args))
+
+(defn crop-prd
+  ""
+  [y k-ap]
+  (do
+    (crop (make-crop-args (make-cor-file-name-str y k-ap) geo-prd-cost-el "-0.png" "_prd_el.png"))
+    (crop (make-crop-args (make-cor-file-name-str y k-ap) geo-prd-cost-mf "-0.png" "_prd_mf.png"))))
+
+(defn crop-lbr
+  ""
+  [y k-ap]
+  (do
+    (crop (make-crop-args (make-cor-file-name-str y k-ap) geo-lbr-cost "-0.png" "_lbr_cost.png"))
+    (crop (make-crop-args (make-cor-file-name-str y k-ap) geo-lbr-prod "-0.png" "_lbr_prod.png"))))
+
+(defn crop-inv
+  ""
+  [y k-ap]
+  (doseq [[pg rg] pg-rg]
+    (crop (make-crop-args (make-cor-file-name-str y k-ap) geo-inv-el (str "-" pg ".png") (str "_" rg "_el.png")))
+    (crop (make-crop-args (make-cor-file-name-str y k-ap) geo-inv-mf (str "-" pg ".png") (str "_" rg "_mf.png")))))
+
+(defn extract-text
+  ""
+  [file-name]
+  (shell/sh
+   "tesseract"
+   (str prcs-dir "cor/crop/" file-name)
+   (str prcs-dir "cor/extract/" file-name)
+   "-psm"
+   "6"))
+
+(defn doseq-et
+  ""
+  []
+  (doseq [f (.listFiles (io/file (str prcs-dir "cor/crop")))]
+    (extract-text (.getName f))))
+
+(defn read-a-line
+  ""
+  [y k-ap ext]
+  (slurp (str prcs-dir "cor/extract/" (make-cor-file-name-str y k-ap) (str ext ".png.txt"))))
+
+(defn perse-8-token
+  ""
+  [y k-ap ext]
+   (take 8 (re-seq #"[0-9,.]+" (read-a-line y k-ap ext))))
+
+(defn remove-comma
+  ""
+  [s]
+  (apply str (re-seq #"[0-9.]+" s)))
+
+(defn ins-prd
+  "it should be called in transaction"
+  [y k-ap em]
+  (let [[a b c d e f g h] (vec (map bigdec (map remove-comma (perse-8-token y k-ap (str "_prd_" em)))))]
+    (jdbc/insert-values
+     :prd
+     [:y :q :em :ap :prd_n :prd_c :prd_c_pu]
+     [y 1 em (name k-ap) (with-precision 2 :rounding HALF_DOWN (/ a b)) a b]
+     [y 2 em (name k-ap) (with-precision 2 :rounding HALF_DOWN (/ c d)) c d]
+     [y 3 em (name k-ap) (with-precision 2 :rounding HALF_DOWN (/ e f)) e f]
+     [y 4 em (name k-ap) (with-precision 2 :rounding HALF_DOWN (/ g h)) g h])))
+
+(defn prd-select
+  ""
+  []
+  (select-from-h2 (str
+   "SELECT
+        y, q, em, ap, prd_n, prd_c, prd_c_pu
+    FROM
+        prd
+    ORDER BY
+        y, q, em, ap DESC")))
+
+(defn main-prd
+  ""
+  []
+  (write-csv (str prcs-dir "/cor/csv/prd.csv")
+             (transpose-2d-str-array (into-2d-str-array
+              (for [line (prd-select)] (map str [(line :y) (line :q) (line :em) (line :ap) (.intValue (line :prd_n)) (.intValue (line :prd_c)) (.doubleValue (line :prd_c_pu))]))))))
+
+;"select y, q, sum(casewhen(ap='p',prd_n,0)) as p_prd_n, sum(casewhen(ap='a',prd_n,0)) as a_prd_n from prd group by q order by y, q")
+
+(defn get-lbr-cost
+  ""
+  [y k-ap]
+  (map remove-comma
+       (map first
+            (partition 2 (perse-8-token y k-ap "_lbr_cost")))))
+
+(defn get-lbr-prod
+  ""
+  [y k-ap]
+  (map remove-comma
+       (re-seq #"[0-9,]+" (read-a-line y k-ap "_lbr_prod"))))
+
+(defn ins-lbr
+  "it should be called in transaction"
+  [y k-ap]
+  (let [[a b c d] (vec (get-lbr-cost y k-ap)) [e f g h] (vec (get-lbr-prod y k-ap))]
+    (jdbc/insert-values
+     :lbr
+     [:y :q :ap :lbr_c :prdtv]
+     [y 1 (name k-ap) a e]
+     [y 2 (name k-ap) b f]
+     [y 3 (name k-ap) c g]
+     [y 4 (name k-ap) d h])))
+
+(defn lbr-select
+  ""
+  []
+  (select-from-h2 (str
+   "SELECT
+        y, q, ap, lbr_c, prdtv
+    FROM
+        lbr
+    ORDER BY
+        y, q, ap DESC")))
+
+(defn main-lbr
+  ""
+  []
+  (write-csv (str prcs-dir "/cor/csv/lbr.csv")
+             (transpose-2d-str-array (into-2d-str-array
+              (for [line (lbr-select)] (map str [(line :y) (line :q) (line :ap) (line :lbr_c) (line :prdtv)]))))))
+
+(defn get-inv-inf
+  ""
+  [y k-ap rg em]
+  (let [lines (reverse (for [line (re-seq #".+\n" (read-a-line y k-ap (str "_" rg "_" em)))] (re-seq #"[0-9.%]+" line)))]
+    (vec (map vec (reverse (for [each (cons
+     (map first (partition 2 (first lines)))
+     (rest lines))] (for [j (take 4 each)] (Integer/parseInt j))))))))
+
+(defn ins-inv
+  ""
+  [y k-ap rg em]
+  (let [[[a b c d] [e f g h] [i j k l]] (get-inv-inf y k-ap rg em)]
+    (jdbc/insert-values
+     :inv
+     [:rg :y :q :em :ap :bg_inv :cur_ship :demand :ed_inv]
+     [rg y 1 em (name k-ap) a e i (- (+ a e) i)]
+     [rg y 2 em (name k-ap) b f j (- (+ b f) j)]
+     [rg y 3 em (name k-ap) c g k (- (+ c g) k)]
+     [rg y 4 em (name k-ap) d h l (- (+ d h) l)])))
+
+(defn ds-ins-inv
+  ""
+  []
+  (doseq [rg '("NA" "EA" "AP" "LA") em '("el" "mf") k-ap '(:p :a)]
+    (ins-inv 6 k-ap rg em)))
+
+(defn inv-select
+  ""
+  []
+  (select-from-h2 (str
+   "SELECT
+        rg, y, q, em, ap, bg_inv, cur_ship, demand, ed_inv
+    FROM
+        inv
+    ORDER BY
+        q, y, rg, em, ap DESC")))
+
+(defn main-inv
+  ""
+  []
+  (write-csv (str prcs-dir "/cor/csv/inv.csv")
+             (transpose-2d-str-array (into-2d-str-array
+                                      (for [line (inv-select)] (map str [(line :rg) (line :y) (line :q) (line :em) (line :ap)
+                                                                         (line :bg_inv) (line :cur_ship) (line :demand) (line :ed_inv)]))))))
+
+(defn create-tbl-prd
+  ""
+  []
+  (jdbc/create-table
+   :prd
+   [:y "INT"]
+   [:q "INT"]
+   [:em "VARCHAR(12)"]
+   [:ap "VARCHAR(12)"]
+   [:prd_n "DECIMAL(12, 2)"]
+   [:prd_c "DECIMAL(12, 2)"]
+   [:prd_c_pu "DECIMAL(12, 2)"]))
+
+(defn create-tbl-lbr
+  ""
+  []
+  (jdbc/create-table
+   :lbr
+   [:y "INT"]
+   [:q "INT"]
+   [:ap "VARCHAR(12)"]
+   [:lbr_c "VARCHAR(12)"]
+   [:prdtv "VARCHAR(12)"]))
+
+(defn create-tbl-inv
+  ""
+  []
+  (jdbc/create-table
+   :inv
+   [:rg "VARCHAR(12)"]
+   [:y "INT"]
+   [:q "INT"]
+   [:em "VARCHAR(12)"]
+   [:ap "VARCHAR(12)"]
+   [:bg_inv "INT"]
+   [:cur_ship "INT"]
+   [:demand "INT"]
+   [:ed_inv "INT"]))
+
+(defn drop-tbl
+  ""
+  [s-tbl]
+  (try
+    (jdbc/drop-table s-tbl)
+    (catch Exception _)))
 
 ;;; gsr
 (def gsr-file "gsr.csv")
