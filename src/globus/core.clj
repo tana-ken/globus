@@ -46,7 +46,7 @@
 (defn into-2d-str-array
   "make a 2 dimention Stirng array"
   [lists]
-  (into-array (for [list lists] (into-array String list))))
+  (into-array (for [list lists] (into-array String (map str list)))))
 
 (defn transpose-2d-str-array
   "return transposed 2 dimention String array"
@@ -56,7 +56,7 @@
         out-array (make-array String y x)]
     (doseq [i (range 0 x) j (range 0 y)]
       (aset #^String out-array j i (aget #^String in-array i j)))
-  out-array))
+    out-array))
 
 (def h2 {:subprotocol "h2"
          :subname "/Users/kenta/h2/globus"
@@ -122,7 +122,7 @@
   (take 27
         (for [line lists :when (= 17 (count line))]
          ; need to change for year
-          (get-value line 8 4))))
+          (get-value line 12 4))))
 
 (defn create-cir-header
   "return list that supplement the lack of information in cir file"
@@ -367,10 +367,15 @@
   (doseq [f (.listFiles (io/file (str prcs-dir "cor/crop")))]
     (extract-text (.getName f))))
 
+(defn rep-zero
+  ""
+  [s]
+  (clojure.string/replace s "O" "0"))
+
 (defn read-a-line
   ""
   [y k-ap ext]
-  (slurp (str prcs-dir "cor/extract/" (make-cor-file-name-str y k-ap) (str ext ".png.txt"))))
+  (rep-zero (slurp (str prcs-dir "cor/extract/" (make-cor-file-name-str y k-ap) (str ext ".png.txt")))))
 
 (defn perse-8-token
   ""
@@ -396,21 +401,22 @@
 
 (defn prd-select
   ""
-  []
+  [y]
   (select-from-h2 (str
    "SELECT
         y, q, em, ap, prd_n, prd_c, prd_c_pu
     FROM
         prd
+    WHERE y=" y "
     ORDER BY
         y, q, em, ap DESC")))
 
 (defn main-prd
   ""
-  []
+  [y]
   (write-csv (str prcs-dir "/cor/csv/prd.csv")
              (transpose-2d-str-array (into-2d-str-array
-              (for [line (prd-select)] (map str [(line :y) (line :q) (line :em) (line :ap) (.intValue (line :prd_n)) (.intValue (line :prd_c)) (.doubleValue (line :prd_c_pu))]))))))
+              (for [line (prd-select y)] (map str [(line :y) (line :q) (line :em) (line :ap) (.intValue (line :prd_n)) (.intValue (line :prd_c)) (.doubleValue (line :prd_c_pu))]))))))
 
 ;"select y, q, sum(casewhen(ap='p',prd_n,0)) as p_prd_n, sum(casewhen(ap='a',prd_n,0)) as a_prd_n from prd group by q order by y, q")
 
@@ -441,30 +447,32 @@
 
 (defn lbr-select
   ""
-  []
+  [y]
   (select-from-h2 (str
    "SELECT
         y, q, ap, lbr_c, prdtv
     FROM
         lbr
+    WHERE y=" y "
     ORDER BY
         y, q, ap DESC")))
 
 (defn main-lbr
   ""
-  []
+  [y]
   (write-csv (str prcs-dir "/cor/csv/lbr.csv")
              (transpose-2d-str-array (into-2d-str-array
-              (for [line (lbr-select)] (map str [(line :y) (line :q) (line :ap) (line :lbr_c) (line :prdtv)]))))))
+              (for [line (lbr-select y)] (map str [(line :y) (line :q) (line :ap) (line :lbr_c) (line :prdtv)]))))))
 
 (defn get-inv-inf
   ""
   [y k-ap rg em]
+  (do (println (str y k-ap rg em))
   (let [lines (reverse (for [line (re-seq #".+\n" (read-a-line y k-ap (str "_" rg "_" em)))] (re-seq #"[0-9.%]+" line)))]
     (vec (map vec (reverse (for [each (cons
      (map first (partition 2 (first lines)))
      (rest lines))] (for [j (take 4 each)] (Integer/parseInt j))))))))
-
+)
 (defn ins-inv
   ""
   [y k-ap rg em]
@@ -479,29 +487,58 @@
 
 (defn ds-ins-inv
   ""
-  []
+  [y]
   (doseq [rg '("NA" "EA" "AP" "LA") em '("el" "mf") k-ap '(:p :a)]
-    (ins-inv 6 k-ap rg em)))
+    (ins-inv y k-ap rg em)))
 
 (defn inv-select
   ""
-  []
+  [y]
   (select-from-h2 (str
    "SELECT
         rg, y, q, em, ap, bg_inv, cur_ship, demand, ed_inv
     FROM
         inv
+    WHERE y=" y "
     ORDER BY
         q, y, rg, em, ap DESC")))
 
 (defn main-inv
   ""
-  []
+  [y]
   (write-csv (str prcs-dir "/cor/csv/inv.csv")
              (transpose-2d-str-array (into-2d-str-array
-                                      (for [line (inv-select)] (map str [(line :rg) (line :y) (line :q) (line :em) (line :ap)
+                                      (for [line (inv-select y)] (map str [(line :rg) (line :y) (line :q) (line :em) (line :ap)
                                                                          (line :bg_inv) (line :cur_ship) (line :demand) (line :ed_inv)]))))))
 
+                                        ; (select-from-h2 "select sum(casewhen(rg='NA', bg_inv, 0)) as NA, sum(casewhen(rg='EA', bg_inv, 0)) as EA, sum(casewhen(rg='AP', bg_inv, 0)) as AP, sum(casewhen(rg='LA', bg_inv, 0)) as LA from inv where y=7 and q=1 and ap='a' and em='el';")
+                                        ;(pp/pprint (select-from-h2 "select em, ap, sum(casewhen(rg='NA', bg_inv, 0)) as NA, sum(casewhen(rg='EA', bg_inv, 0)) as EA, sum(casewhen(rg='AP', bg_inv, 0)) as APa, sum(casewhen(rg='LA', bg_inv, 0)) as LA from inv where y=7 and q=1 group by em, ap order by em, ap;"))
+
+
+(defn make-str-aaa
+  ""
+  [y, q]
+  (str "select "
+  (apply str
+  (for [rg '("NA" "EA" "AP" "LA") em '("el" "mf")]
+    (str "sum(casewhen(rg='" rg "'and em='" em "', bg_inv, 0)) as bi_" rg em ", "
+         "sum(casewhen(rg='" rg "'and em='" em "', cur_ship, 0)) as cs_" rg em ", "    
+         "sum(casewhen(rg='" rg "'and em='" em "', demand, 0)) as dm_" rg em ", "
+         "sum(casewhen(rg='" rg "'and em='" em "', ed_inv, 0)) as ed_" rg em ", ")))
+  " ap from inv where y=" y " and q=" q " group by ap order by ap DESC;"))
+
+(defn aaa-conv
+  [lines]
+  (for [line lines] [(line :ap)
+     (line :bi_nael) (line :cs_nael) (line :dm_nael) (line :ed_nael)
+     (line :bi_namf) (line :cs_namf) (line :dm_namf) (line :ed_namf)
+     (line :bi_eael) (line :cs_eael) (line :dm_eael) (line :ed_eael)
+     (line :bi_eamf) (line :cs_eamf) (line :dm_eamf) (line :ed_eamf)
+     (line :bi_apel) (line :cs_apel) (line :dm_apel) (line :ed_apel)
+     (line :bi_apmf) (line :cs_apmf) (line :dm_apmf) (line :ed_apmf)
+     (line :bi_lael) (line :cs_lael) (line :dm_lael) (line :ed_lael)
+     (line :bi_lamf) (line :cs_lamf) (line :dm_lamf) (line :ed_lamf)]))
+    
 (defn create-tbl-prd
   ""
   []
@@ -547,6 +584,16 @@
   (try
     (jdbc/drop-table s-tbl)
     (catch Exception _)))
+
+(defn main-post-cor
+  [y]
+  (doseq [q (range 1 5)]
+    (write-csv (str prcs-dir "cor/csv/" y ".csv")
+    (-> (select-from-h2 (make-str-aaa y q))
+        (aaa-conv ,)
+        (into-2d-str-array ,)
+        (transpose-2d-str-array ,)))))
+
 
 ;;; gsr
 (def gsr-file "gsr.csv")
